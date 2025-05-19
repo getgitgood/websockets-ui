@@ -39,6 +39,7 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
         data: unknown;
       };
       try {
+        console.log(`Event type: ${type}`);
         switch (type) {
           case "reg": {
             const user: UserEntity = db.addPlayer(
@@ -51,6 +52,8 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
             ws.send(JSON.stringify(response));
             const usersWs = db.getUsersWs();
 
+            console.log(`user "${user.name}" join`);
+
             if (usersWs)
               usersWs.forEach((ws) => {
                 ws.send(db.roomsList);
@@ -62,6 +65,7 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
 
           case "create_room": {
             const { user } = ws;
+            console.log(`user "${user.name}" creates new room.`);
             db.createRoom(user);
 
             const usersWs = db.getUsersWs();
@@ -73,7 +77,6 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
 
           case "add_user_to_room": {
             const { indexRoom } = data as IndexRoom;
-
             db.addUserToRoom(indexRoom, ws.user.name);
             const session = db.createGame(indexRoom);
 
@@ -82,6 +85,10 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
 
               user1.ws.send(user1.message);
               user2.ws.send(user2.message);
+
+              console.log(
+                `user ${user1.ws.user.name} joins ${user2.ws.user.name} room.`
+              );
             }
 
             const usersWs = db.getUsersWs();
@@ -112,6 +119,7 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
             user1.ws.send(user1.message);
             user2.ws.send(user2.message);
 
+            console.log(`Ships for game with id ${gameId} aligned`);
             const turn = db.getCurrentTurn(gameId);
 
             if (!turn)
@@ -121,6 +129,10 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
 
             turn1.ws.send(turn1.message);
             turn2.ws.send(turn2.message);
+
+            break;
+          }
+          case "attack": {
           }
           default:
             break;
@@ -133,7 +145,6 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
         console.log(e);
       }
     }
-    // console.log(db.storage.users);
   });
 });
 

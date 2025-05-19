@@ -10,7 +10,11 @@ import {
   ShipsData,
 } from "types";
 
-const createGameMessage = (type: EventType, data: unknown, ws: WebSocket) => ({
+const createGameMessage = (
+  type: EventType,
+  data: unknown,
+  ws: SocketWithUser
+) => ({
   message: JSON.stringify({
     type,
     data: JSON.stringify(data),
@@ -21,19 +25,20 @@ const createGameMessage = (type: EventType, data: unknown, ws: WebSocket) => ({
 
 type GameMessage = ReturnType<typeof createGameMessage>;
 
+type SocketWithUser = WebSocket & { user: UserEntity };
 export type DbEntity = {
   storage: {
     users: UserEntity[];
     rooms: RoomEntity[];
     winners: WinnerEntity[];
-    usersWs: Map<string, WebSocket>;
+    usersWs: Map<string, SocketWithUser>;
     runningGames: Map<string, { [key: string]: ShipsData }>;
     hashNamePairs: Map<string, string>;
   };
 
   addPlayer: (
     data: RegEventCredentials,
-    socket: WebSocket & { user: UserEntity }
+    socket: SocketWithUser
   ) => UserEntity & { error: boolean; errorText: string };
   addUserToRoom: (roomId: string, username: string) => void;
   createGame: (roomId: string) => GameMessage[] | undefined;
@@ -42,10 +47,13 @@ export type DbEntity = {
   startGame: (roomId: string) => GameMessage[] | undefined;
   createRoom: (userId: Required<UserEntity>) => void;
   roomsList: string;
-  getUsersWs: () => Map<string, WebSocket>;
-  getWsByUserId: (userId: string) => WebSocket | undefined;
-  getCurrentTurn: (gameId: string, userHash?: string) => GameMessage[] | undefined;
-  getCurrentGameSockets: (gameId: string) => WebSocket[] | undefined;
+  getUsersWs: () => Map<string, SocketWithUser>;
+  getWsByUserId: (userId: string) => SocketWithUser | undefined;
+  getCurrentTurn: (
+    gameId: string,
+    userHash?: string
+  ) => GameMessage[] | undefined;
+  getCurrentGameSockets: (gameId: string) => SocketWithUser[] | undefined;
 };
 
 export const db: DbEntity = {
@@ -58,7 +66,7 @@ export const db: DbEntity = {
     hashNamePairs: new Map(),
   },
 
-  addPlayer(data: RegEventCredentials, socket: WebSocket) {
+  addPlayer(data: RegEventCredentials, socket: SocketWithUser) {
     const users = this.storage.users;
 
     const { name } = data as RegEventCredentials;
@@ -185,16 +193,16 @@ export const db: DbEntity = {
 
   addShips(roomId, userId, ships) {
     const game = this.storage.runningGames.get(roomId);
+    if (!game) {
+      this.storage.runningGames.set(roomId, { [userId]: ships });
 
-    if (game) {
-      const updatedState = { ...game, [userId]: ships };
-      this.storage.runningGames.set(roomId, updatedState);
-
-      return true;
+      return false;
     }
-    this.storage.runningGames.set(roomId, { [userId]: ships });
 
-    return false;
+    const updatedState = { ...game, [userId]: ships };
+    this.storage.runningGames.set(roomId, updatedState);
+
+    return true;
   },
 
   startGame(roomId) {
@@ -213,6 +221,7 @@ export const db: DbEntity = {
     const [hash1, hash2] = gameEntries;
 
     const [shipsData1, shipsData2] = [game[hash1], game[hash2]];
+
     const [username1, username2] = [hashPairs.get(hash1), hashPairs.get(hash2)];
 
     if (!username1 || !username2)
@@ -228,12 +237,12 @@ export const db: DbEntity = {
     return [
       createGameMessage(
         "start_game",
-        { ships: shipsData1, currentPlayerIndex: username1 },
+        { ships: shipsData1, currentPlayerIndex: hash1 },
         ws1
       ),
       createGameMessage(
         "start_game",
-        { ships: shipsData2, currentPlayerIndex: username2 },
+        { ships: shipsData2, currentPlayerIndex: hash2 },
         ws2
       ),
     ];
@@ -281,6 +290,8 @@ export const db: DbEntity = {
       currentPlayer = Object.keys(game).filter(
         (value) => value !== userHash
       )[0];
+
+    console.log(`current turn is on ${currentPlayer}`);
 
     return [
       createGameMessage("turn", { currentPlayer }, ws1),
