@@ -1,0 +1,21 @@
+{
+  "ts-node": {
+    "esm": true,
+    "files": true
+  },
+  "compilerOptions": {
+    "target": "ES5",
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "outDir": "dist",
+    "baseUrl": "src",
+    "module": "ES2020",
+    "moduleResolution": "Node",
+    "noImplicitAny": true,
+    "strict": true
+  },
+
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
