@@ -1,14 +1,19 @@
+import WebSocket from "ws";
+
 export type EventType =
   | "reg"
   | "update_winners"
   | "create_room"
+  | "create_game"
   | "add_user_to_room"
   | "create_game"
   | "update_room"
   | "add_ships"
   | "start_game"
   | "turn"
-  | "attack";
+  | "attack"
+  | "randomAttack"
+  | "finish";
 
 export type RawEvent = {
   type: EventType;
@@ -66,7 +71,7 @@ export type AddShipsEvent = {
 
 export type AddShipsEventData = {
   gameId: string;
-  ships: ShipsData;
+  ships: ShipsData[];
   indexPlayer: string;
 };
 
@@ -80,4 +85,63 @@ export type ShipsData = {
 export type Coords = {
   x: number;
   y: number;
+};
+
+export type ShipCoordinates = Omit<ShipsData, "position"> & {
+  x: number[];
+  y: number[];
+  surrounding?: Coords[];
+  hits: Coords[];
+};
+
+export type ShotStatus = "shot" | "miss" | "killed";
+
+export type AttackResult = {
+  position: Coords;
+  currentPlayer: string;
+  status: ShotStatus;
+};
+
+export type SocketWithUser = WebSocket & { user: UserEntity };
+
+export type UsersWs = Map<string, SocketWithUser>;
+
+export interface DbStorage {
+  users: UserEntity[];
+  rooms: RoomEntity[];
+  winners: WinnerEntity[];
+  usersWs: Map<string, SocketWithUser>;
+  runningGames: Map<string, { [key: string]: ShipsData[] }>;
+  hashNamePairs: Map<string, string>;
+  shipCoordinates: Map<string, { [key: string]: ShipCoordinates[] }>;
+}
+
+export type UserEntityError = UserEntity & {
+  error: boolean;
+  errorText: string;
+};
+
+export type AttackData = {
+  gameId: string;
+  indexPlayer: string;
+} & Coords;
+
+export const parseWsEvent = <T>(data: WebSocket.Data): T | null => {
+  try {
+    const outerData = JSON.parse(data.toString());
+
+    if (typeof outerData.data === "string" && outerData.data.length) {
+      const parsedInnerData = JSON.parse(outerData.data);
+
+      outerData.data = parsedInnerData;
+    }
+
+    return outerData;
+  } catch (e) {
+    if (e instanceof Error) {
+      console.warn(`Error on parse ws request! ${e.message}`);
+    }
+
+    return null;
+  }
 };

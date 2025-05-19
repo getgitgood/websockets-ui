@@ -1,15 +1,18 @@
 import WebSocket, { WebSocketServer } from "ws";
-import { httpServer } from "./src/http_server/index.js";
+import { httpServer } from "./src/http_server/index.ts";
 import {
   RawEvent,
   EventType,
-  RegEventCredentials,
   UserEntity,
-  AddUserToRoomEvent,
   IndexRoom,
   AddShipsEventData,
+  AttackData,
+  parseWsEvent,
 } from "./src/types";
+import { gameModule, roomModule, shipsModule, userModule } from "./src/modules";
+import { logMessage } from "./src/misc/helpers.ts";
 import { db } from "./src/db";
+import { styleText } from "util";
 
 const HTTP_PORT = 8181;
 const WS_PORT = 3000;
@@ -17,19 +20,15 @@ const WS_PORT = 3000;
 console.log(`Start static http server on the ${HTTP_PORT} port!`);
 
 const wss = new WebSocketServer({ port: WS_PORT });
+console.log(styleText("bgBlue", `WebSocket connection established!`));
+console.log(styleText("bgBlue", `Connection info:`));
+console.table(wss.options);
 
-wss.once("connection", (ws) => {
-  console.log(`WebSocket connection established! \nConnection info:`);
-  console.table([
-    {
-      "Connected on port": WS_PORT,
-      "Is in ready state?": ws.readyState === 1,
-      "Is paused?": ws.isPaused,
-    },
-  ]);
-});
+console.log(styleText("bgGreen", `Awaiting for connections...`));
 
-wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
+wss.on("connection", (ws: WebSocket & { user: UserEntity }) => {
+  console.log(styleText("bgBlueBright", `User connected`));
+
   ws.on("message", (data: WebSocket.Data) => {
     const wsEvent = parseWsEvent<RawEvent>(data);
 
@@ -38,138 +37,99 @@ wss.on("connection", (ws: WebSocket & { user: UserEntity }, req) => {
         type: EventType;
         data: unknown;
       };
+
+      logMessage({ type, data: JSON.stringify(data), incoming: true });
+
       try {
-        console.log(`Event type: ${type}`);
         switch (type) {
           case "reg": {
-            const user: UserEntity = db.addPlayer(
-              data as RegEventCredentials,
-              ws
-            );
-            const response = { ...wsEvent, data: JSON.stringify(user) };
-
-            ws.user = user;
-            ws.send(JSON.stringify(response));
-            const usersWs = db.getUsersWs();
-
-            console.log(`user "${user.name}" join`);
-
-            if (usersWs)
-              usersWs.forEach((ws) => {
-                ws.send(db.roomsList);
-                ws.send(db.updateWinners({ name: user.name, wins: 0 }));
-              });
+            userModule.addUser(data, ws);
 
             break;
           }
 
           case "create_room": {
             const { user } = ws;
-            console.log(`user "${user.name}" creates new room.`);
-            db.createRoom(user);
 
-            const usersWs = db.getUsersWs();
-
-            if (usersWs) usersWs.forEach((ws) => ws.send(db.roomsList));
+            roomModule.createRoom(user);
 
             break;
           }
 
           case "add_user_to_room": {
             const { indexRoom } = data as IndexRoom;
-            db.addUserToRoom(indexRoom, ws.user.name);
-            const session = db.createGame(indexRoom);
 
-            if (session) {
-              const [user1, user2] = session;
-
-              user1.ws.send(user1.message);
-              user2.ws.send(user2.message);
-
-              console.log(
-                `user ${user1.ws.user.name} joins ${user2.ws.user.name} room.`
-              );
-            }
-
-            const usersWs = db.getUsersWs();
-
-            if (usersWs.size === 2)
-              usersWs.forEach((ws) => {
-                ws.send(db.roomsList);
-              });
+            roomModule.addUserToRoom(indexRoom, ws.user.name);
+            roomModule.createGame(indexRoom);
 
             break;
           }
 
           case "add_ships": {
             const { gameId, ships, indexPlayer } = data as AddShipsEventData;
-            const bothPlayersReady = db.addShips(gameId, indexPlayer, ships);
 
-            if (!bothPlayersReady) return;
+            shipsModule.addShips({
+              gameId,
+              indexPlayer,
+              ships,
+              socket: ws,
+            });
 
-            const users = db.startGame(gameId);
+            const bothPlayersReady = shipsModule.startGame(gameId);
 
-            if (!users?.length)
-              throw new Error(
-                "Cannot start game, WebSockets assembled incorrectly!"
-              );
-
-            const [user1, user2] = users;
-
-            user1.ws.send(user1.message);
-            user2.ws.send(user2.message);
-
-            console.log(`Ships for game with id ${gameId} aligned`);
-            const turn = db.getCurrentTurn(gameId);
-
-            if (!turn)
-              throw new Error("Error on calculation player's turn order!");
-
-            const [turn1, turn2] = turn;
-
-            turn1.ws.send(turn1.message);
-            turn2.ws.send(turn2.message);
+            if (bothPlayersReady) gameModule.turn(gameId);
 
             break;
           }
+
           case "attack": {
+            const attackResult = gameModule.attack(data);
+
+            if (attackResult === "endGame" || !attackResult) return;
+
+            const { gameId, indexPlayer } = data as AttackData;
+
+            gameModule.turn(gameId, indexPlayer, attackResult === "miss");
+
+            break;
+          }
+          case "randomAttack": {
+            const { gameId, indexPlayer } = data as AttackData;
+            const randomAttackResult = gameModule.randomAttack(
+              gameId,
+              indexPlayer
+            );
+
+            if (randomAttackResult === "endGame" || !randomAttackResult) return;
+
+            gameModule.turn(gameId, indexPlayer, randomAttackResult === "miss");
+
+            break;
           }
           default:
             break;
         }
       } catch (e) {
-        if (e instanceof Error) {
-          console.warn(e.message);
-        }
-
-        console.log(e);
+        if (e instanceof Error) console.warn(e.message);
+        else console.log(e);
       }
     }
   });
 });
 
-const parseWsEvent = <T>(data: WebSocket.Data): T | null => {
-  try {
-    const outerData = JSON.parse(data.toString());
-
-    if (typeof outerData.data === "string" && outerData.data.length) {
-      const parsedInnerData = JSON.parse(outerData.data);
-
-      outerData.data = parsedInnerData;
-    }
-
-    return outerData;
-  } catch (e) {
-    if (e instanceof Error) {
-      console.warn(`Error on parse ws request! ${e.message}`);
-    }
-
-    return null;
-  }
-};
-
 httpServer.listen(HTTP_PORT);
 
 httpServer.on("close", () => {
-  httpServer.close();
+  db.usersWs.forEach((socket, user) => {
+    socket.close();
+
+    console.log(
+      styleText("dim", `WS Connection for user ${user} has been closed.`)
+    );
+  });
+
+  console.log(styleText("green", `WS Server gracefully shutdown.`));
+  wss.close();
+  console.log(styleText("green", `Http Server gracefully shutdown.`));
+  process.exit();
 });
